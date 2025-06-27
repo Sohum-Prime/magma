@@ -1,0 +1,30 @@
+site_name: Magma
+site_url: https://sohum-prime.github.io/magma/
+theme:
+  name: material
+
+nav:
+  - Home: index.md
+  - Models: models.md
+  - Prompts: prompts.md
+  - Tools: tools.md
+  - Agents: agents.md
+  - Observability: observability.md
+  # Add more as needed
+
+docs_dir: docs
+repo_url: https://github.com/sohum-prime/magma
+repo_name: GitHub
+
+markdown_extensions:
+  - toc:
+      permalink: true
+  - admonition
+  - codehilite
+  - footnotes
+
+plugins:
+  - mkdocstrings:
+      handlers:
+        python:
+          paths: [magma]
