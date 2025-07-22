@@ -1,14 +1,12 @@
-import os
-from typing import Any, Dict
+from typing import Any
 
-# Attempt to import the central registry. This will be mocked in tests.
 try:
     from magma import registry
 except ImportError:
     # Provide a dummy for environments where the full package isn't installed,
     # or during initial bootstrapping/testing.
     class DummyRegistry:
-        def add_model(self, model): pass
+        def add_model(self, name:str, model:Any): pass
     registry = DummyRegistry()
 
 # Import BAML's ClientRegistry for type hinting and instantiation.
@@ -47,7 +45,7 @@ class Model:
         self.params = kwargs
         
         # Automatically register the instance upon creation.
-        registry.add_model(self)
+        registry.add_model(self.id, self)
 
     def __repr__(self) -> str:
         return f"magma.Model(id='{self.id}', params={self.params})"

@@ -2,7 +2,7 @@
 
 The most critical—and often most brittle—part of an AI agent is its communication with the Large Language Model. Traditional methods rely on f-string formatting and manually parsing JSON, which is error-prone and hard to maintain.
 
-Project Magma solves this by integrating **BAML**, a domain-specific language designed specifically for defining reliable, type-safe interactions with LLMs. Instead of manipulating strings in Python, you define the *structure* of your prompt in a `.baml` file and call it like a regular function.
+Magma solves this by integrating **BAML**, a domain-specific language designed specifically for defining reliable, type-safe interactions with LLMs. Instead of manipulating strings in Python, you define the *structure* of your prompt in a `.baml` file and call it like a regular function.
 
 ## Core Concept: Separating Prompt Logic from Application Logic
 

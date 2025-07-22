@@ -1,6 +1,6 @@
 # Models: The Universal LLM Interface
 
-At the core of any agent is a foundation model. Project Magma is designed to be model-agnostic, allowing you to seamlessly switch between hundreds of different LLMs from providers like OpenAI, Anthropic, Google, and Cohere, as well as open-source models running locally via Ollama or on services like Hugging Face.
+At the core of any agent is a foundation model. Magma is designed to be model-agnostic, allowing you to seamlessly switch between hundreds of different LLMs from providers like OpenAI, Anthropic, Google, and Cohere, as well as open-source models running locally via Ollama or on services like Hugging Face.
 
 This is achieved through our integration with **LiteLLM**, a brilliant library that provides a unified, standardized API for all model providers. Magma abstracts this into a clean and simple `magma.Model` class.
 
