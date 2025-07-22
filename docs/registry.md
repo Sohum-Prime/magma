@@ -1,105 +1,126 @@
-# The Magma Registry: Your Agent's Automatic Inventory
+# magma.registry
 
-In any complex system, knowing what components you have available is crucial. When building an agent with multiple models, tools, and prompts, you need an easy way to see and access everything you've defined.
+> **Status** | v0.1.0 | Experimental  
+> **Depends on** | `importlib.metadata`, `functools`, `inspect`, `pydantic`, `types`, `magma.tool`, `magma.model`, `magma.prompt`, `magma.agent`  
 
-The **Magma Registry** is the central nervous system of your application. It's a simple, globally accessible object that automatically keeps an inventory of every Magma component you create.
+---
 
-## Core Concept: Zero-Boilerplate Registration
+## 1 · Purpose & Mental Model
+`magma.registry` is the **single source of truth** for *discovering* every artefact created with magma:
 
-The best part about the registry is that you don't have to do anything to use it. It works automatically.
+* **Models** – `magma.model.Model` instances you defined in code  
+* **Tools** – `@tool`‑decorated functions (`ToolInfo`)  
+* **Prompts** – `PromptRunnable`s built via `magma.prompt`  
+* **Agents** – compiled `Agent` runnables
 
-When you define a Magma component, it registers itself with the `magma.registry` behind the scenes.
+Akin to Python’s *entry‑points*, the registry surfaces a **dict‑like interface** (`list()`, `get()`, `values()`) that powers:
 
-*   Create a `magma.Model`? It's in the registry.
-*   Decorate a function with `@magma.tool`? It's in the registry.
-*   Define a `magma.Prompt`? It's in the registry.
+* the CLI (`magma ls`, `magma explain <name>`)  
+* auto‑docs generation (`magma docs build`)  
+* dynamic loading in production (e.g., “run agent X by name”)
 
-This eliminates the need for manual bookkeeping, like appending components to lists or managing complex configuration objects. Your code stays clean, and you always have a single source of truth for all the building blocks of your agent.
+All lookups are **lazy** – import cost is paid only when you access an item.
 
-## How to Use It: Inspecting Your Components
+---
 
-The primary way you'll interact with the registry is by inspecting its contents to see what's available. This is incredibly useful during development and debugging.
-
-The registry is accessed via the top-level `magma` import. Its components are stored in dictionary-like objects:
-
-*   `magma.registry.models`
-*   `magma.registry.tools`
-*   `magma.registry.prompts`
-
-### Example
-
-Imagine you're setting up your agent in a Python script or a Jupyter notebook. You can easily get a sense of your declared components:
-
-**`main.py`**
-```python
-import magma
-import os
-
-# --- 1. Define your components as usual ---
-
-# Define some models
-gpt4o = magma.Model(id="openai/gpt-4o", name="gpt4o")
-claude_sonnet = magma.Model(id="anthropic/claude-3-5-sonnet-20240620", name="claude_sonnet")
-
-# Define a tool
-@magma.tool
-def get_weather(city: str) -> str:
-    """Gets the current weather for a specified city."""
-    # ... implementation ...
-    return f"The weather in {city} is sunny."
-
-# --- 2. Inspect the registry ---
-
-print("--- Magma Component Registry ---")
-
-# See all registered models by the name you provided
-print("\nAvailable Models:")
-print(magma.registry.models)
-# Expected Output:
-# {'gpt4o': <magma.Model id='openai/gpt-4o'>, 'claude_sonnet': <magma.Model id='anthropic/claude-3-5-sonnet-20240620'>}
-
-# See all registered tools by their function name
-print("\nAvailable Tools:")
-print(magma.registry.tools)
-# Expected Output:
-# {'get_weather': <magma.Tool name='get_weather'>}
-
-# You can access a specific component by its key
-print(f"\nDetails for 'gpt4o' model: {magma.registry.models['gpt4o']}")
-```
-
-> **Note on Naming:**
-> For `magma.Model`, you provide an explicit `name` to act as the key in the registry. For `@magma.tool` and `magma.Prompt`, the key is automatically the name of the decorated function or the variable you assign it to.
-
-## Use in Practice: Wiring Your Agent
-
-The registry isn't just for inspection—it's a crucial part of wiring your agent together. For example, a tool executor node in your agent graph needs to find and call the correct tool based on the LLM's output. The registry makes this trivial.
+## 2 · Quick‑start
 
 ```python
-# Conceptual tool executor node
-def tool_node(state: AgentState):
-    tool_calls = state['messages'][-1].tool_calls
-    
-    for call in tool_calls:
-        # The LLM gives us the tool name as a string
-        tool_name = call.__class__.__name__
-        
-        # The registry lets us easily look up the callable tool object
-        if tool_name in magma.registry.tools:
-            tool_to_call = magma.registry.tools[tool_name]
-            # ... invoke the tool ...
-        else:
-            # ... handle case where tool doesn't exist ...
+from magma.registry import models, tools, prompts, agents
+
+# List available components
+print(models.list())   # {'openai/gpt-4o', 'anthropic/claude-4-opus'}
+print(tools.list())    # {'sentiment', 'create_scatter'}
+
+# Fetch by name
+plot_tool = tools.get("create_scatter")
+plot_tool.run_locally("data.csv")
+
+# Iterate over agents
+for ag in agents.values():
+    print("Agent:", ag.name, "nodes:", ag.mermaid()[:60], "…")
+````
+
+---
+
+## 3 · Public API
+
+### 3.1 Sub‑registries
+
+| Symbol    | Returns                    | Description                           |
+| --------- | -------------------------- | ------------------------------------- |
+| `models`  | `Registry[Model]`          | Keys = `model.id`                     |
+| `tools`   | `Registry[ToolInfo]`       | Keys = `tool.name`                    |
+| `prompts` | `Registry[PromptRunnable]` | Keys = prompt `.name` or BAML fn name |
+| `agents`  | `Registry[Agent]`          | Keys = agent `.name`                  |
+
+### 3.2 Generic Registry interface
+
+```python
+class Registry(Generic[T]):
+    def list(self) -> set[str]: ...
+    def get(self, key: str) -> T | None: ...
+    def values(self) -> Iterable[T]: ...
+    def refresh(self) -> None: ...
 ```
 
-This pattern of "look up by name" makes your agent's logic clean and decouples the graph definition from the tool implementation.
+> *Gotchas*
+>
+> • `refresh()` clears cache and re‑scans packages – rarely needed except in REPL after hot reload.
+>
+> • Lookups are **case‑sensitive**.
 
-## What's Registered?
+---
 
-In `v0.1`, the Magma registry will automatically track the following components:
+## 4 · Design Notes
 
-*   **Models:** Every instance of `magma.Model`.
-*   **Tools:** Every function decorated with `@magma.tool` or class that inherits from `magma.Tool`.
-*   **Prompts:** Every instance of `magma.Prompt`.
+* **Lazy loading** – first access triggers `_populate()` which:
 
-As Magma evolves, any new core components will also be integrated into the registry, maintaining it as the central, discoverable inventory for your entire agentic system.
+  1. Scans `sys.modules` for already‑imported magma artefacts.
+  2. Iterates entry‑points group `"magma_plugins"` so third‑party packages can ship tools / agents.
+* **Checksum validation** – tooling registry calls `tool._validate_baml_sig()` (from `magma.tool`) to catch drift early.
+* **Thread safety** – internal state protected by a `threading.Lock`; double‑checked locking avoids race on high concurrency servers.
+* **Lightweight** – Registry objects contain *references*, not copies; no deep cloning.
+
+---
+
+## 5 · Extensibility Hooks
+
+| Hook                       | Usage                                                                                    | Scenario                       |
+| -------------------------- | ---------------------------------------------------------------------------------------- | ------------------------------ |
+| **Plugin entry‑points**    | `setup.cfg`:<br>`[options.entry_points]`<br>`magma_plugins =\n    mytools = mypkg.tools` | Ship custom toolset via PyPI   |
+| **Manual registration**    | `models.register(my_model)`                                                              | Create models dynamically      |
+| **Filter view**            | `tools.filter(lambda t: "plot" in t.name)` *(planned v0.2)*                              | Context‑aware CLI              |
+| **Auto‑refresh on import** | `export MAGMA_REGISTRY_AUTO_REFRESH=1`                                                   | Jupyter hot‑reload convenience |
+
+---
+
+## 6 · Integration Points
+
+| External         | Interaction                                   | Notes                                     |
+| ---------------- | --------------------------------------------- | ----------------------------------------- |
+| **magma.cli**    | `magma ls`, `magma explain` read registry     | Zero config discovery                     |
+| **magma.prompt** | Registers each runnable (if `name` provided)  | Enables prompt reuse by string ID         |
+| **magma.agent**  | Registers compiled agent under key `name`     | Run via `magma run agent <name>` (future) |
+| **Docs builder** | Iterates `registry` to emit tables & diagrams | Keeps docs in sync with code              |
+
+---
+
+## 7 · Reference Implementation Roadmap
+
+| Phase           | Scope                                        | Tests                                                   |
+| --------------- | -------------------------------------------- | ------------------------------------------------------- |
+| **P1**          | Core `Registry` class + sub‑instances        | Unit: register dummy obj, assert list/get               |
+| **P2**          | Entry‑point loading                          | Install test‑wheel in CI, assert object visible         |
+| **P3**          | Checksum validation for tools                | Modify tool signature → expect error on registry access |
+| **P4** *(v0.2)* | Filter & search helpers, auto‑refresh toggle | REPL hot reload test                                    |
+
+---
+
+## 8 · Changelog Snippet
+
+
+### Added
+- Lazy-loading `Registry` with sub-registries: models, tools, prompts, agents.
+- Entry‑point plugin support under group `magma_plugins`.
+- Tool checksum validation at registry access.

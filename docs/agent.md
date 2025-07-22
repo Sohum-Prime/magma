@@ -1,141 +1,156 @@
-# Agents: Orchestrating Workflows with Graphs
+# magma.agent
 
-Magma, an "agent" is not an opaque, magical black box. It is a structured, stateful workflow defined as a graph. This graph dictates how the agent thinks, what tools it can use, and how it moves from a user's query to a final answer. To power this, Magma uses **LangGraph** as its core execution engine.
+> **Status** | v0.1.0 | Experimental  
+> **Depends on** | `langgraph >= 0.0.35`, `pydantic`, `inspect`, `magma.prompt`, `magma.trace`  
 
-The `magma.Agent` class is your primary tool for building these workflows. It provides a clean, explicit interface for defining the nodes (steps) and edges (transitions) of your agent's logic.
+---
 
-## Core Concept: The Agent as a State Machine
+## 1 · Purpose & Mental Model
+`magma.agent` is a **thin, ergonomic façade** over LangGraph’s `StateGraph`.  
+It lets you assemble nodes (plain callables or `PromptRunnable`s), declare edges, and obtain a compiled **Runnable** that behaves exactly like a LangGraph workflow – but with:
 
-At its heart, a Magma agent is a state machine. You define a `state` object, and each node in the graph is a function that can read from and write to that state. This makes the agent's "memory" and "context" explicit and easy to manage.
+* first‑class tracing (`magma.trace`)  
+* automatic registry exposure (`magma.registry.agents`)  
+* helper utilities for documentation / visualisation
 
-The workflow for building an agent is:
-1.  **Define the State:** Create a `TypedDict` that represents all the information your agent needs to track.
-2.  **Define the Nodes:** Write Python functions that perform specific tasks, like calling an LLM or executing a tool.
-3.  **Instantiate the Agent:** Create an instance of `magma.Agent`, passing it your state definition and any models or tools it needs.
-4.  **Build the Graph:** Explicitly add your nodes and define the edges that connect them.
-5.  **Compile and Run:** Compile the agent into a runnable application.
+The philosophy: **“same power, saner defaults.”**
 
-### 1. Defining State
+---
 
-The state is the memory of your agent. LangGraph uses a `TypedDict` to define its structure. The `add_messages` annotation from LangGraph is particularly useful for managing conversational history.
-
-```python
-from typing import TypedDict, Annotated, List
-from langgraph.graph.message import add_messages
-
-class AgentState(TypedDict):
-    """
-    Represents the state of our agent.
-
-    Attributes:
-        messages: The list of messages that make up the conversation.
-                  The `add_messages` function ensures that new messages
-                  are always appended to this list.
-    """
-    messages: Annotated[list, add_messages]
-```
-
-### 2. Defining Nodes
-
-A node is just a Python function that takes the current state as input and returns a dictionary with the state updates.
+## 2 · Quick‑start
 
 ```python
-import magma
+from typing import TypedDict
+from magma.agent import Agent
+from magma.prompt import prompt
+from magma.model import Model
 from baml_client import b
 
-# Assume agent_prompt is a magma.Prompt(baml_fn=b.MyAgent)
-# Assume get_stock_price is a @magma.tool decorated function
+# 1) define state
+class ChatState(TypedDict):
+    messages: list[dict]
+    count: int
 
-def agent_node(state: AgentState):
-    """This node calls the LLM to decide what to do next."""
-    query = state['messages'][0].content
-    # The agent automatically injects the tools and model defined in its constructor
-    response = agent_prompt(query=query)
-    # The response is a BAML Pydantic object, which is a valid message type
-    return {"messages": [response]}
-
-def tool_node(state: AgentState):
-    """This node executes any tools called by the agent_node."""
-    last_message = state['messages'][-1]
-    tool_calls = last_message.tool_calls
-    
-    outputs = []
-    for call in tool_calls:
-        tool_name = call.__class__.__name__
-        tool_to_call = magma.registry.tools[tool_name]
-        output = tool_to_call.invoke(call.model_dump())
-        outputs.append({"tool_call_id": call.id, "content": str(output)})
-        
-    return {"messages": outputs}
-```
-
-### 3. Instantiating and Building the Agent
-
-Once you have your state and nodes, you can construct the graph using the `magma.Agent` class. This is where you equip the agent with its core components.
-
-```python
-# Instantiate the agent, providing its state schema, tools, and default model.
-agent = magma.Agent(
-    state=AgentState,
-    tools=[get_stock_price],
-    model=magma.Model(id="openai/gpt-4o")
+# 2) build a prompt node
+echo = prompt(
+    baml_fn=b.Echo,                # simple echo baml fn
+    model=Model("openai/gpt-4o"),
 )
 
-# Add the functions as nodes in the graph
-agent.add_node("agent", agent_node)
-agent.add_node("tools", tool_node)
+# 3) assemble agent
+bot = Agent(state=ChatState, name="echo_bot")
 
-# Define the entry point of the graph
-agent.set_entry_point("agent")
+bot.add_node("start", lambda s: {"messages": [], "count": 0})
+bot.add_node("echo",  echo)
 
-# Define the conditional logic for routing
-def should_call_tools(state: AgentState):
-    """
-    A function that determines the next step.
-    If the LLM returned a tool_call, route to the 'tools' node.
-    Otherwise, end the execution.
-    """
-    if state['messages'][-1].tool_calls:
-        return "tools"
-    return "__end__"
+bot.add_edge("start", "echo")
+bot.add_edge("echo", END)          # marks END
 
-# Add the edges to connect the nodes
-agent.add_conditional_edges("agent", should_call_tools)
-agent.add_edge("tools", "agent") # After executing tools, go back to the agent node
-```
+echo_bot = bot.compile()
 
-This explicit building process (`add_node`, `add_edge`) gives you complete control over the agent's flow, making it transparent and easy to debug.
+# 4) run
+print(echo_bot.invoke({"messages": [{"role": "user", "content": "hello"}]}))
+````
 
-### 4. Compiling and Running
+Mermaid graph is auto‑saved to `./echo_bot.mmd`.
 
-Finally, compile the agent into a runnable LangGraph application.
+---
 
-```python
-# The compile() method finalizes the graph structure.
-app = agent.compile()
+## 3 · Public API
 
-# Now you can invoke or stream from the application.
-query = "What is the price of NVDA?"
-for event in app.stream({"messages": [("user", query)]}):
-    print(event)
-```
+### 3.1 Symbol overview
 
-## Visualization
+| Symbol       | Type                 | Description                             |
+| ------------ | -------------------- | --------------------------------------- |
+| `Agent`      | class                | Builder wrapping `langgraph.StateGraph` |
+| `AgentError` | `Exception`          | Raised on invalid graph ops             |
+| `NodeMeta`   | `pydantic.BaseModel` | Runtime metadata (name, fn, type)       |
 
-Because `magma.Agent` builds a standard LangGraph object, you can use all of LangGraph's powerful visualization features. Simply call the `get_graph()` method on your compiled application to generate a diagram of your agent's structure.
+### 3.2 Key signatures
 
 ```python
-from IPython.display import Image
+class Agent:
+    def __init__(
+        self,
+        *,
+        state: type[TypedDict],
+        name: str | None = None,
+        trace: bool = True,
+    ): ...
 
-# Compile the agent
-app = agent.compile()
+    # ---- graph construction helpers ---------
+    def add_node(self, name: str, fn: Callable, /, *, trace: bool | str = True): ...
+    def add_edge(self, src: str, dst: str): ...
+    def add_conditional_edges(
+        self,
+        src: str,
+        router_fn: Callable,
+        mapping: dict[str, str],
+    ): ...
+    # -----------------------------------------
 
-# Get the graph and draw it
-graph_image = app.get_graph().draw_mermaid_png()
-Image(graph_image)
+    def compile(self) -> "Runnable": ...
+    """Return LangGraph Runnable (streams, invoke, etc.)."""
+
+    # ---- utilities --------------------------
+    def mermaid(self) -> str: ...
+    def save_mermaid(self, path="agent.mmd") -> Path: ...
+    def list_nodes(self) -> list[NodeMeta]: ...
+    # -----------------------------------------
 ```
-This will produce a clear diagram of your nodes and edges, making it easy to understand and share your agent's architecture.
 
-## Multi-Agent Systems
+> *Gotchas*
+>
+> • `trace=False` on `add_node()` disables span creation for noisy helper nodes.
+>
+> • `compile()` registers the resulting runnable under `magma.registry.agents[name]`.
 
-The `magma.Agent` class is the fundamental building block for more complex systems. Because each agent is a self-contained graph, you can compose them into multi-agent systems where the output of one agent becomes the input for another. This is achieved by treating a compiled agent `app` as a node within a higher-level "supervisor" graph. This advanced pattern will be covered in the Multi-Agent Systems guide.
+---
+
+## 4 · Design Notes
+
+* **Composition over inheritance** – Internally owns a `StateGraph`; does *not* subclass it → future‑proof against upstream API churn.
+* **Tracing** – Wraps every node function in `@observe(name=f"node:{node_name}")` unless disabled.
+* **Visualisation** – After `compile()`, calls `graph.as_mermaid()`; if `MERMAID_OUT_DIR` env is set, auto‑writes file.
+* **Registry** – Metadata object inserted so CLI can do `magma ls agents`.
+
+---
+
+## 5 · Extensibility Hooks
+
+| Hook                      | Usage                                                               | Scenario                          |
+| ------------------------- | ------------------------------------------------------------------- | --------------------------------- |
+| **Custom node wrapper**   | `Agent(wrapper=my_decorator)` kwarg                                 | Inject retry / timeout policies   |
+| **Persistent storage**    | subclass Agent, override `.compile()` to wire LangGraph persistence | Long‑running workflows            |
+| **Dynamic edge creation** | call `agent.add_dynamic_router(router_fn)` (planned v0.2)           | Graph topology decided at runtime |
+
+---
+
+## 6 · Integration Points
+
+| External           | Interaction                                      | Notes                                        |
+| ------------------ | ------------------------------------------------ | -------------------------------------------- |
+| **LangGraph**      | All heavy lifting (streaming, conditional edges) | Agent is a syntactic helper                  |
+| **magma.prompt**   | Nodes often are `PromptRunnable`s                | Automatic tracing cascades                   |
+| **magma.trace**    | Node wrapper calls `observe`                     | Span names: `agent:<agent_name>‖node:<node>` |
+| **magma.registry** | `.agents` sub‑registry                           | Enables CLI commands & docs generation       |
+
+---
+
+## 7 · Reference Implementation Roadmap
+
+| Phase           | Scope                                                 | Tests                                |
+| --------------- | ----------------------------------------------------- | ------------------------------------ |
+| **P1**          | Core builder, add\_node/edge/compile, registry insert | Graph with 2 nodes invokes correctly |
+| **P2**          | Tracing wrapper + mermaid export                      | Assert span count & file exists      |
+| **P3**          | Conditional edges helper                              | Branch‑ing graph golden‑file test    |
+| **P4** *(v0.2)* | Persistence adapter & dynamic routers                 | Integration with sqlite persistence  |
+
+---
+
+## 8 · Changelog Snippet
+
+
+### Added
+- `Agent` builder: thin wrapper around LangGraph with tracing & registry integration.
+- `.mermaid()` utility for instant diagram export.
